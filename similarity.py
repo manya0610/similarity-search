@@ -1,11 +1,13 @@
 """Product similarity search over the Amazon-fashion JSONL dataset.
 
-Two feature spaces:
+Three feature spaces:
   - Text:    sentence-transformer embedding of a curated text blob.
   - Numeric: z-scored numeric/categorical vector (price, weight, rating,
              ranks, reviews, flags, brand & child-category one-hots).
+  - Image:   CLIP embedding of product images, mean-pooled across all
+             images per product.
 
-Final similarity = w_text * cos(text) + w_num * cos(numeric).
+Final similarity = w_text * cos(text) + w_num * cos(numeric) + w_img * cos(image).
 FAISS IndexFlatIP retrieves a text-based candidate pool; the combined
 score then re-ranks within the pool.
 """
@@ -20,11 +22,14 @@ import faiss
 import numpy as np
 import pandas as pd
 import torch
+from PIL import Image
 from sentence_transformers import SentenceTransformer
 
 DATA_PATH = Path(__file__).parent / "marketing_sample_for_amazon_com-amazon_fashion_products__20200201_20200430__30k_data.ldjson"
 CACHE_DIR = Path(__file__).parent / ".sim_cache"
-MODEL_NAME = "BAAI/bge-small-en-v1.5"
+IMAGE_DIR = Path(__file__).parent / "images_medium"
+MODEL_NAME = "BAAI/bge-base-en-v1.5"
+CLIP_MODEL = "clip-ViT-B-32"
 
 
 # ---------- field parsers ----------
@@ -191,8 +196,10 @@ class SimilarityIndex:
         self,
         df: pd.DataFrame,
         model_name: str = MODEL_NAME,
-        text_weight: float = 0.75,
-        numeric_weight: float = 0.25,
+        clip_model: str = CLIP_MODEL,
+        text_weight: float = 0.60,
+        numeric_weight: float = 0.15,
+        image_weight: float = 0.25,
         top_brands: int = 200,
         top_categories: int = 100,
     ):
@@ -200,7 +207,9 @@ class SimilarityIndex:
         self.id_to_idx = {uid: i for i, uid in enumerate(df["uniq_id"].tolist())}
         self.text_weight = text_weight
         self.numeric_weight = numeric_weight
+        self.image_weight = image_weight
         self.model_name = model_name
+        self.clip_model = clip_model
         self.top_brands = top_brands
         self.top_categories = top_categories
         self._build()
@@ -244,7 +253,7 @@ class SimilarityIndex:
         model = SentenceTransformer(self.model_name, device=device)
         emb = model.encode(
             self.df["text_blob"].tolist(),
-            batch_size=128,
+            batch_size=512,
             convert_to_numpy=True,
             normalize_embeddings=True,
             show_progress_bar=True,
@@ -252,11 +261,78 @@ class SimilarityIndex:
         np.save(cache, emb)
         return emb
 
+    def _image_matrix(self) -> np.ndarray:
+        CACHE_DIR.mkdir(exist_ok=True)
+        cache = CACHE_DIR / f"image_emb_{self.clip_model.replace('/', '_')}.npy"
+        if cache.exists():
+            emb = np.load(cache)
+            if emb.shape[0] == len(self.df):
+                return emb.astype(np.float32)
+
+        device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+        model = SentenceTransformer(self.clip_model, device=device)
+
+        # (image_path, row_index) pairs — filename format: <uniq_id>_<name>.jpg
+        uid_to_idx = {uid: i for i, uid in enumerate(self.df["uniq_id"])}
+        pairs: list[tuple[Path, int]] = [
+            (p, uid_to_idx[p.name[:32]])
+            for p in sorted(IMAGE_DIR.glob("*.jpg"))
+            if p.name[:32] in uid_to_idx
+        ]
+        print(f"Found {len(pairs)} images for {len(set(i for _, i in pairs))} products")
+
+        # Probe output dimension (512 for ViT-B/32, 768 for ViT-L/14)
+        with Image.open(pairs[0][0]) as probe:
+            dim = model.encode([probe], convert_to_numpy=True, normalize_embeddings=False).shape[1]
+
+        n = len(self.df)
+        accum = np.zeros((n, dim), dtype=np.float32)
+        counts = np.zeros(n, dtype=np.int32)
+
+        CHUNK = 512
+        for start in range(0, len(pairs), CHUNK):
+            chunk = pairs[start : start + CHUNK]
+            images = [Image.open(p) for p, _ in chunk]
+            indices = [idx for _, idx in chunk]
+            vecs = model.encode(
+                images,
+                batch_size=256,
+                convert_to_numpy=True,
+                normalize_embeddings=False,
+                show_progress_bar=False,
+            ).astype(np.float32)
+            for img in images:
+                img.close()
+            for vec, idx in zip(vecs, indices):
+                accum[idx] += vec
+                counts[idx] += 1
+            done = start + len(chunk)
+            if done % 10000 < CHUNK or done == len(pairs):
+                print(f"  image encoding: {done}/{len(pairs)}")
+
+        # Mean-pool then L2-normalise; products with no images stay as zero vectors
+        has_img = counts > 0
+        accum[has_img] /= counts[has_img, np.newaxis]
+        norms = np.linalg.norm(accum, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        emb = accum / norms
+        emb[~has_img] = 0.0
+
+        np.save(cache, emb)
+        print(f"Image embeddings cached → {cache}")
+        return emb
+
     def _build(self) -> None:
         self.text_emb = self._text_matrix()
         self.num_emb = self._numeric_matrix()
-        self.text_index = faiss.IndexFlatIP(self.text_emb.shape[1])
-        self.text_index.add(self.text_emb)
+        self.img_emb = self._image_matrix() if self.image_weight > 0 else None
+        cpu_index = faiss.IndexFlatIP(self.text_emb.shape[1])
+        cpu_index.add(self.text_emb)
+        if torch.cuda.is_available():
+            res = faiss.StandardGpuResources()
+            self.text_index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
+        else:
+            self.text_index = cpu_index
 
     def find_similar(self, product_id: str, num_similar: int = 10, pool_mult: int = 20) -> List[str]:
         if product_id not in self.id_to_idx:
@@ -273,6 +349,10 @@ class SimilarityIndex:
         num_q = self.num_emb[idx : idx + 1]
         num_scores = (self.num_emb[cand_idx] @ num_q.T).ravel()
         combined = self.text_weight * text_scores + self.numeric_weight * num_scores
+        if self.image_weight > 0 and self.img_emb is not None:
+            img_q = self.img_emb[idx : idx + 1]
+            img_scores = (self.img_emb[cand_idx] @ img_q.T).ravel()
+            combined += self.image_weight * img_scores
 
         rating = self.df["rating"].iloc[cand_idx].fillna(0).to_numpy()
         price = self.df["sales_price"].iloc[cand_idx].fillna(np.inf).to_numpy()

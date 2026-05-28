@@ -8,8 +8,8 @@ from urllib.parse import unquote, urlparse
 import httpx
 
 INPUT_FILE = Path(__file__).parent / "marketing_sample_for_amazon_com-amazon_fashion_products__20200201_20200430__30k_data.ldjson"
-OUTPUT_DIR = Path(__file__).parent / "images"
-CONCURRENCY = 64
+OUTPUT_DIR = Path(__file__).parent / "images_low"
+CONCURRENCY = 128
 TIMEOUT = 30.0
 MAX_RETRIES = 3
 
@@ -25,7 +25,7 @@ def iter_tasks(path: Path):
             except json.JSONDecodeError:
                 continue
             uniq_id = row.get("uniq_id")
-            large = row.get("large")
+            large = row.get("image_urls__small")
             if not uniq_id or not large:
                 continue
             for url in large.split("|"):
