@@ -29,7 +29,7 @@ DATA_PATH = Path(__file__).parent / "marketing_sample_for_amazon_com-amazon_fash
 CACHE_DIR = Path(__file__).parent / ".sim_cache"
 IMAGE_DIR = Path(__file__).parent / "images_medium"
 MODEL_NAME = "BAAI/bge-base-en-v1.5"
-CLIP_MODEL = "clip-ViT-B-32"
+CLIP_MODEL = "clip-ViT-L-14"
 
 
 # ---------- field parsers ----------
@@ -197,9 +197,9 @@ class SimilarityIndex:
         df: pd.DataFrame,
         model_name: str = MODEL_NAME,
         clip_model: str = CLIP_MODEL,
-        text_weight: float = 0.60,
-        numeric_weight: float = 0.15,
-        image_weight: float = 0.25,
+        text_weight: float = 0.0,
+        numeric_weight: float = 0.0,
+        image_weight: float = 1.0,
         top_brands: int = 200,
         top_categories: int = 100,
     ):
@@ -334,7 +334,7 @@ class SimilarityIndex:
         else:
             self.text_index = cpu_index
 
-    def find_similar(self, product_id: str, num_similar: int = 10, pool_mult: int = 20) -> List[str]:
+    def find_similar(self, product_id: str, num_similar: int = 10, pool_mult: int = 20, return_scores: bool = False):
         if product_id not in self.id_to_idx:
             raise KeyError(product_id)
         idx = self.id_to_idx[product_id]
@@ -357,8 +357,12 @@ class SimilarityIndex:
         rating = self.df["rating"].iloc[cand_idx].fillna(0).to_numpy()
         price = self.df["sales_price"].iloc[cand_idx].fillna(np.inf).to_numpy()
         order = np.lexsort((price, -rating, -combined))
-        top = cand_idx[order][:num_similar]
-        return self.df["uniq_id"].iloc[top].tolist()
+        top_order = order[:num_similar]
+        top = cand_idx[top_order]
+        ids = self.df["uniq_id"].iloc[top].tolist()
+        if return_scores:
+            return ids, combined[top_order].tolist()
+        return ids
 
 
 # ---------- module-level convenience ----------

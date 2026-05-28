@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Product Similarity Search</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #f0f2f5;
+    color: #1a1a2e;
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    background: #1a1a2e;
+    color: white;
+    padding: 1rem 2rem;
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 2px 8px rgba(0,0,0,.3);
+  }
+  header h1 { font-size: 1.2rem; font-weight: 600; white-space: nowrap; }
+
+  .search-wrap { position: relative; flex: 1; max-width: 520px; }
+  #search-input {
+    width: 100%;
+    padding: .6rem 1rem;
+    border-radius: 8px;
+    border: none;
+    font-size: .95rem;
+    background: #2d2d4e;
+    color: white;
+    outline: none;
+  }
+  #search-input::placeholder { color: #888; }
+  #search-input:focus { background: #3a3a5c; }
+
+  #suggestions {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0; right: 0;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.15);
+    overflow: hidden;
+    display: none;
+    z-index: 200;
+  }
+  .suggestion {
+    padding: .7rem 1rem;
+    cursor: pointer;
+    border-bottom: 1px solid #f0f0f0;
+    transition: background .1s;
+  }
+  .suggestion:last-child { border-bottom: none; }
+  .suggestion:hover { background: #f5f7ff; }
+  .suggestion .name { font-size: .9rem; font-weight: 500; color: #1a1a2e; }
+  .suggestion .brand { font-size: .75rem; color: #888; margin-top: 2px; }
+
+  /* ── Controls bar ── */
+  #controls {
+    display: none;
+    align-items: center;
+    gap: 1rem;
+    padding: .6rem 2rem;
+    background: white;
+    border-bottom: 1px solid #e5e7eb;
+    font-size: .85rem;
+    color: #555;
+  }
+  #controls label { display: flex; align-items: center; gap: .4rem; }
+  #n-results { width: 60px; padding: .25rem .5rem; border: 1px solid #ccc; border-radius: 4px; }
+
+  /* ── Main ── */
+  main { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+
+  #placeholder {
+    text-align: center;
+    padding: 6rem 2rem;
+    color: #888;
+  }
+  #placeholder h2 { font-size: 1.4rem; margin-bottom: .5rem; color: #555; }
+
+  /* ── Query card ── */
+  #query-section { display: none; margin-bottom: 2rem; }
+  #query-section h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: #888; margin-bottom: .75rem; }
+
+  .query-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.08);
+    display: flex;
+    gap: 0;
+    overflow: hidden;
+  }
+  .query-images {
+    width: 280px;
+    flex-shrink: 0;
+    position: relative;
+    background: #f8f8f8;
+    cursor: pointer;
+  }
+  .query-images img {
+    width: 100%;
+    height: 280px;
+    object-fit: contain;
+    display: block;
+  }
+  .img-nav {
+    position: absolute;
+    bottom: 8px;
+    left: 0; right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 5px;
+  }
+  .img-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: rgba(0,0,0,.2);
+    transition: background .2s;
+  }
+  .img-dot.active { background: #2563eb; }
+  .img-count {
+    position: absolute;
+    top: 8px; right: 8px;
+    background: rgba(0,0,0,.5);
+    color: white;
+    font-size: .7rem;
+    padding: 2px 7px;
+    border-radius: 99px;
+  }
+  .no-img {
+    width: 100%; height: 280px;
+    display: flex; align-items: center; justify-content: center;
+    color: #ccc; font-size: .85rem;
+  }
+  .query-meta {
+    padding: 1.5rem 2rem;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+  }
+  .query-meta .product-name {
+    font-size: 1.15rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: #1a1a2e;
+  }
+  .meta-row { display: flex; gap: 1.5rem; flex-wrap: wrap; margin-top: .25rem; }
+  .meta-chip {
+    background: #f0f2f5;
+    border-radius: 6px;
+    padding: .3rem .7rem;
+    font-size: .8rem;
+    color: #444;
+  }
+  .meta-chip strong { color: #1a1a2e; }
+  .stars { color: #f59e0b; font-size: .85rem; }
+  .uid { font-size: .7rem; color: #bbb; margin-top: auto; font-family: monospace; }
+
+  /* ── Results ── */
+  #results-section { display: none; }
+  #results-section h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: #888; margin-bottom: .75rem; }
+
+  #results-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1rem;
+  }
+
+  .result-card {
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.07);
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform .15s, box-shadow .15s;
+    display: flex;
+    flex-direction: column;
+  }
+  .result-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(0,0,0,.12);
+  }
+  .card-img {
+    width: 100%; height: 200px;
+    object-fit: contain;
+    background: #f8f8f8;
+    display: block;
+  }
+  .card-img-placeholder {
+    width: 100%; height: 200px;
+    background: #f0f0f0;
+    display: flex; align-items: center; justify-content: center;
+    color: #ccc; font-size: .8rem;
+  }
+  .card-body { padding: .85rem; flex: 1; display: flex; flex-direction: column; gap: .3rem; }
+  .card-name {
+    font-size: .85rem;
+    font-weight: 600;
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .card-brand { font-size: .72rem; color: #888; }
+  .card-cat { font-size: .7rem; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: auto;
+    padding-top: .5rem;
+  }
+  .card-price { font-size: .9rem; font-weight: 700; color: #1a1a2e; }
+  .card-rating { font-size: .75rem; color: #f59e0b; }
+
+  .score-bar {
+    height: 3px;
+    background: #e5e7eb;
+    position: relative;
+  }
+  .score-fill {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    border-radius: 99px;
+  }
+  .score-badge {
+    font-size: .7rem;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 99px;
+    color: white;
+  }
+
+  /* ── Spinner ── */
+  #spinner {
+    display: none;
+    text-align: center;
+    padding: 4rem;
+    color: #888;
+  }
+  .spinner-ring {
+    display: inline-block;
+    width: 36px; height: 36px;
+    border: 3px solid #e5e7eb;
+    border-top-color: #2563eb;
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    margin-bottom: .75rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🔍 Similarity Search</h1>
+  <div class="search-wrap">
+    <input id="search-input" type="text" placeholder="Search by name or paste a product ID…" autocomplete="off">
+    <div id="suggestions"></div>
+  </div>
+</header>
+
+<div id="controls">
+  <label>Results: <input id="n-results" type="number" value="10" min="1" max="30"></label>
+  <span id="controls-info"></span>
+</div>
+
+<main>
+  <div id="placeholder">
+    <h2>Search for a product to find similar items</h2>
+    <p>Type a product name in the search bar above</p>
+  </div>
+
+  <div id="spinner"><div class="spinner-ring"></div><br>Loading…</div>
+
+  <div id="query-section">
+    <h2>Query product</h2>
+    <div class="query-card" id="query-card"></div>
+  </div>
+
+  <div id="results-section">
+    <h2 id="results-heading">Similar products</h2>
+    <div id="results-grid"></div>
+  </div>
+</main>
+
+<script>
+const searchInput = document.getElementById('search-input');
+const suggestions = document.getElementById('suggestions');
+const controls = document.getElementById('controls');
+const controlsInfo = document.getElementById('controls-info');
+const nResults = document.getElementById('n-results');
+const placeholder = document.getElementById('placeholder');
+const spinner = document.getElementById('spinner');
+const querySection = document.getElementById('query-section');
+const queryCard = document.getElementById('query-card');
+const resultsSection = document.getElementById('results-section');
+const resultsHeading = document.getElementById('results-heading');
+const resultsGrid = document.getElementById('results-grid');
+
+let debounceTimer;
+let currentQueryId = null;
+
+// ── Score colour ──────────────────────────────────────────────
+function scoreColor(s) {
+  if (s >= 0.85) return '#16a34a';
+  if (s >= 0.75) return '#65a30d';
+  if (s >= 0.65) return '#d97706';
+  return '#dc2626';
+}
+
+// ── Star string ───────────────────────────────────────────────
+function stars(rating) {
+  if (rating == null) return '';
+  const full = Math.round(rating);
+  return '★'.repeat(full) + '☆'.repeat(5 - full) + ` ${rating.toFixed(1)}`;
+}
+
+// ── Image component with cycling ──────────────────────────────
+function makeImageCycler(images, height = 280) {
+  if (!images || images.length === 0) {
+    return `<div class="no-img" style="height:${height}px">No image</div>`;
+  }
+  const dots = images.map((_, i) =>
+    `<span class="img-dot${i === 0 ? ' active' : ''}" data-i="${i}"></span>`
+  ).join('');
+  const countBadge = images.length > 1
+    ? `<span class="img-count">1 / ${images.length}</span>` : '';
+  return `
+    <div class="query-images" style="height:${height}px" data-imgs='${JSON.stringify(images)}' data-cur="0">
+      <img src="${images[0]}" alt="product" style="height:${height}px">
+      ${countBadge}
+      ${images.length > 1 ? `<div class="img-nav">${dots}</div>` : ''}
+    </div>`;
+}
+
+document.addEventListener('click', e => {
+  const cycler = e.target.closest('[data-imgs]');
+  if (!cycler) return;
+  const imgs = JSON.parse(cycler.dataset.imgs);
+  if (imgs.length <= 1) return;
+  let cur = (parseInt(cycler.dataset.cur) + 1) % imgs.length;
+  cycler.dataset.cur = cur;
+  cycler.querySelector('img').src = imgs[cur];
+  const countEl = cycler.querySelector('.img-count');
+  if (countEl) countEl.textContent = `${cur + 1} / ${imgs.length}`;
+  cycler.querySelectorAll('.img-dot').forEach((d, i) =>
+    d.classList.toggle('active', i === cur));
+});
+
+// ── Render query card ─────────────────────────────────────────
+function renderQuery(p) {
+  const priceStr = p.price != null ? `₹${p.price.toFixed(0)}` : '—';
+  const ratingStr = p.rating != null ? `<span class="stars">${stars(p.rating)}</span>` : '';
+  const reviewStr = p.review_count != null ? `${Math.round(p.review_count)} reviews` : '';
+  queryCard.innerHTML = `
+    ${makeImageCycler(p.images, 280)}
+    <div class="query-meta">
+      <div class="product-name">${p.product_name}</div>
+      <div class="meta-row">
+        ${p.brand ? `<div class="meta-chip"><strong>Brand</strong> ${p.brand}</div>` : ''}
+        ${p.category ? `<div class="meta-chip"><strong>Category</strong> ${p.category}</div>` : ''}
+        ${p.price != null ? `<div class="meta-chip"><strong>Price</strong> ${priceStr}</div>` : ''}
+        ${p.rating != null ? `<div class="meta-chip">${ratingStr}${reviewStr ? ' · ' + reviewStr : ''}</div>` : ''}
+      </div>
+      <div class="uid">${p.uniq_id}</div>
+    </div>`;
+}
+
+// ── Render result card ────────────────────────────────────────
+function renderResultCard(p) {
+  const img = p.images && p.images.length > 0
+    ? `<img class="card-img" src="${p.images[0]}" alt="product">`
+    : `<div class="card-img-placeholder">No image</div>`;
+  const priceStr = p.price != null ? `₹${p.price.toFixed(0)}` : '—';
+  const ratingStr = p.rating != null ? `<span class="card-rating">${stars(p.rating)}</span>` : '';
+  const scorePct = Math.round((p.score || 0) * 100);
+  const color = scoreColor(p.score || 0);
+  const card = document.createElement('div');
+  card.className = 'result-card';
+  card.dataset.id = p.uniq_id;
+  card.innerHTML = `
+    ${img}
+    <div class="score-bar"><div class="score-fill" style="width:${scorePct}%;background:${color}"></div></div>
+    <div class="card-body">
+      <div class="card-name">${p.product_name}</div>
+      <div class="card-brand">${p.brand || ''}</div>
+      <div class="card-cat">${p.category || ''}</div>
+      <div class="card-footer">
+        <span class="card-price">${priceStr}</span>
+        <span class="score-badge" style="background:${color}">${scorePct}%</span>
+      </div>
+      ${ratingStr}
+    </div>`;
+  card.addEventListener('click', () => loadSimilar(p.uniq_id));
+  return card;
+}
+
+// ── Load similar products ─────────────────────────────────────
+async function loadSimilar(productId) {
+  currentQueryId = productId;
+  const n = parseInt(nResults.value) || 6;
+
+  placeholder.style.display = 'none';
+  querySection.style.display = 'none';
+  resultsSection.style.display = 'none';
+  spinner.style.display = 'block';
+  suggestions.style.display = 'none';
+  searchInput.value = '';
+
+  try {
+    const res = await fetch(`/api/similar?id=${productId}&n=${n}`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+
+    renderQuery(data.query);
+    resultsGrid.innerHTML = '';
+    data.results.forEach(p => resultsGrid.appendChild(renderResultCard(p)));
+
+    resultsHeading.textContent = `Similar products (${data.results.length})`;
+    controlsInfo.textContent = `Showing results for: ${data.query.product_name.slice(0, 60)}`;
+
+    controls.style.display = 'flex';
+    querySection.style.display = 'block';
+    resultsSection.style.display = 'block';
+  } catch (err) {
+    alert('Error: ' + err.message);
+    placeholder.style.display = 'block';
+  } finally {
+    spinner.style.display = 'none';
+  }
+}
+
+// ── n-results change ──────────────────────────────────────────
+nResults.addEventListener('change', () => {
+  if (currentQueryId) loadSimilar(currentQueryId);
+});
+
+// ── Search ────────────────────────────────────────────────────
+const ID_RE = /^[0-9a-f]{32}$/i;
+
+searchInput.addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  const q = searchInput.value.trim();
+  if (!q) { suggestions.style.display = 'none'; return; }
+
+  // Direct ID lookup — no suggestions needed
+  if (ID_RE.test(q)) {
+    suggestions.style.display = 'none';
+    return;
+  }
+
+  debounceTimer = setTimeout(async () => {
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=8`);
+      const items = await res.json();
+      suggestions.innerHTML = items.map(p => `
+        <div class="suggestion" data-id="${p.uniq_id}">
+          <div class="name">${p.product_name}</div>
+          <div class="brand">${p.brand}</div>
+        </div>`).join('');
+      suggestions.style.display = items.length ? 'block' : 'none';
+    } catch { suggestions.style.display = 'none'; }
+  }, 250);
+});
+
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { suggestions.style.display = 'none'; return; }
+  if (e.key === 'Enter') {
+    const q = searchInput.value.trim();
+    if (ID_RE.test(q)) loadSimilar(q);
+  }
+});
+
+suggestions.addEventListener('click', e => {
+  const item = e.target.closest('.suggestion');
+  if (!item) return;
+  loadSimilar(item.dataset.id);
+});
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-wrap')) suggestions.style.display = 'none';
+});
+
+</script>
+</body>
+</html>
